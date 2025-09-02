@@ -244,7 +244,6 @@ def page_cadastrar():
         ]:
             st.session_state.pop(k, None)
         st.session_state.pop("_clear_after_save", None)
-        # não fazemos rerun aqui; a própria renderização já seguirá com estado limpo
 
     proprietarios=listar_vendedores()
     st.markdown("### Proprietário do imóvel")
@@ -278,7 +277,7 @@ def page_cadastrar():
             )
             proprietario_id = int(label_sel.split(" - ")[0])
     else:
-        # ------- CEP DO PROPRIETÁRIO ANTES DOS CAMPOS -------
+        # ------- CEP DO PROPRIETÁRIO -------
         with st.expander("Preencher endereço do proprietário via CEP", expanded=False):
             cep_search_prop = st.text_input("Digite o CEP do proprietário", key="cep_search_prop", placeholder="00000-000")
             if st.button("Buscar CEP do proprietário", key="btn_busca_cep_prop"):
@@ -361,12 +360,9 @@ def page_cadastrar():
         uploads=st.file_uploader("Fotos/Vídeos", key=f"uploads_{st.session_state['uploader_key']}", type=list({e.strip('.') for e in IMAGEM_EXTS|VIDEO_EXTS}), accept_multiple_files=True)
         ok=st.form_submit_button("Salvar Imóvel")
 
-        # Mensagem pós-salvamento (renderiza logo abaixo do botão)
-    
     if st.session_state.get("_saved_message"):
         st.success(st.session_state["_saved_message"])
         st.session_state.pop("_saved_message", None)
-
 
     if ok:
         # Proprietário
@@ -397,8 +393,6 @@ def page_cadastrar():
         st.session_state["uploader_key"] = st.session_state.get("uploader_key", 0) + 1
         st.rerun()
 
-
-
 def page_consulta():
     st.title("Consulta de Imóveis")
     imvs = listar_imoveis()
@@ -423,31 +417,14 @@ def page_consulta():
     else:
         filtrados = imvs
 
-    # Tabela dos resultados (já filtrada)
-    st.dataframe(pd.DataFrame([{
-        "Código":i["codigo"],"Título":i["titulo"],"Tipo":i["tipo"],
-        "Valor (R$)":format_brl(i["valor"]),
-        "Proprietário":i["vendedor_nome"],"Quartos":i["quartos"],
-        "Banheiros":i["banheiros"],"Vagas":i["vagas"],
-        "Área (m²)":i["area"],"Bairro":i["bairro"],
-        "Cidade/Estado":i["cidade_estado"],"CEP":i["cep"],
-        "Data cadastro":i["data_cadastro"]
-    } for i in filtrados]), use_container_width=True)
+    # --> Sem tabela: apenas combo com resultados da busca
+    st.caption(f"Resultados: {len(filtrados)} imóvel(is)")
 
-    # Sem resultados
-    if not filtrados:
-        st.markdown("---"); st.subheader("Detalhes do Imóvel")
-        st.warning("Nenhum imóvel encontrado para a busca. Refine os termos.")
-        return
+    # --- resetar seleção se a lista mudou (hash simples) + select robusto por rótulo
+    import hashlib, json
+    def _hash_list(lst): 
+        return hashlib.md5(json.dumps(lst, sort_keys=True, default=str).encode()).hexdigest()
 
-    # Reseta seleção se a busca mudou
-    if "consulta_q_prev" not in st.session_state:
-        st.session_state["consulta_q_prev"] = q
-    if st.session_state["consulta_q_prev"] != q:
-        st.session_state.pop("consulta_sel_idx", None)
-        st.session_state["consulta_q_prev"] = q
-
-    # Selectbox logo abaixo da tabela para escolher exatamente UM imóvel
     def _label_sel(i):
         rua = i.get('rua') or ''
         numero = i.get('numero') or ''
@@ -456,48 +433,63 @@ def page_consulta():
         end = f"{rua}, {numero} — {bairro} — {cid}".strip(' —,')
         return f"{i.get('codigo')} — {i.get('titulo')} — {end}"
 
-    indices = list(range(len(filtrados)))
-    if len(filtrados) > 1:
-        st.markdown("")
-        sel_idx = st.selectbox(
-            "Selecione um dos imóveis listados para ver os detalhes",
-            indices,
-            format_func=lambda k: _label_sel(filtrados[k]),
-            index=0 if st.session_state.get("consulta_sel_idx") is None else min(st.session_state["consulta_sel_idx"], len(indices)-1),
-            key="consulta_sel_idx"
-        )
-    else:
-        sel_idx = 0
-        st.session_state["consulta_sel_idx"] = 0
+    if not filtrados:
+        st.warning("Nenhum imóvel encontrado para a busca. Refine os termos.")
+        return
 
-    imv = filtrados[sel_idx]
+    labels = [_label_sel(i) for i in filtrados]
+    mapa = {lab: imv for lab, imv in zip(labels, filtrados)}
+    curr_hash = _hash_list(labels)
+
+    if st.session_state.get("consulta_hash") != curr_hash:
+        st.session_state["consulta_hash"] = curr_hash
+        st.session_state["consulta_sel_label"] = None  # limpa seleção
+
+    sel_label = st.selectbox(
+        "Selecione o imóvel",
+        options=labels,
+        index=None if st.session_state.get("consulta_sel_label") is None else labels.index(st.session_state["consulta_sel_label"]) if st.session_state["consulta_sel_label"] in labels else None,
+        placeholder="Escolha um imóvel…",
+        key="consulta_sel_label"
+    )
 
     # Detalhes
-    st.markdown("---"); st.subheader("Detalhes do Imóvel")
+    st.markdown("---")
+    st.subheader("Detalhes do Imóvel")
 
-    total_interessados = len(listar_interessados(imv["id"]))
-    st.info(f"**Interessados neste imóvel:** {total_interessados}")
+    if not sel_label:
+        st.info("Escolha um imóvel para ver os detalhes.")
+        return
 
-    cols = st.columns([2,3])
-    with cols[0]:
-        show_media_carousel(imv["id"])
-    with cols[1]:
-        st.markdown("### " + (imv["titulo"] or "(Sem título)"))
-        st.markdown(f"**Valor:** R$ {format_brl(imv['valor'] or 0)}")
-        st.write(imv["descricao"] or "Sem descrição")
-        st.markdown("---")
-        c1,c2,c3,c4 = st.columns(4)
-        c1.metric("Quartos", imv["quartos"])
-        c2.metric("Banheiros", imv["banheiros"])
-        c3.metric("Vagas", imv["vagas"])
-        c4.metric("Área (m²)", imv["area"])
-        st.markdown("---")
-        st.write(f"**Endereço**: {imv['rua']}, {imv['numero']} — {imv['complemento']}")
-        st.write(f"**Bairro**: {imv['bairro']}")
-        st.write(f"**Cidade/Estado**: {imv['cidade_estado']} — **CEP**: {imv['cep']}")
-        st.write(f"**Proprietário**: {imv['vendedor_nome'] or '—'}")
-        st.write(f"**Código**: {imv['codigo']}")
-        st.write(f"**Cadastrado em**: {imv['data_cadastro']}")
+    imv = mapa[sel_label]
+
+    try:
+        total_interessados = len(listar_interessados(imv["id"]))
+        st.info(f"**Interessados neste imóvel:** {total_interessados}")
+
+        cols = st.columns([2,3])
+        with cols[0]:
+            show_media_carousel(imv["id"])
+        with cols[1]:
+            st.markdown("### " + (imv.get("titulo") or "(Sem título)"))
+            st.markdown(f"**Valor:** R$ {format_brl(imv.get('valor') or 0)}")
+            st.write(imv.get("descricao") or "Sem descrição")
+            st.markdown("---")
+            c1,c2,c3,c4 = st.columns(4)
+            c1.metric("Quartos", imv.get("quartos") or 0)
+            c2.metric("Banheiros", imv.get("banheiros") or 0)
+            c3.metric("Vagas", imv.get("vagas") or 0)
+            c4.metric("Área (m²)", imv.get("area") or 0)
+            st.markdown("---")
+            st.write(f"**Endereço**: {imv.get('rua','')}, {imv.get('numero','')} — {imv.get('complemento','')}")
+            st.write(f"**Bairro**: {imv.get('bairro','')}")
+            st.write(f"**Cidade/Estado**: {imv.get('cidade_estado','')} — **CEP**: {imv.get('cep','')}")
+            st.write(f"**Proprietário**: {imv.get('vendedor_nome') or '—'}")
+            st.write(f"**Código**: {imv.get('codigo')}")
+            st.write(f"**Cadastrado em**: {imv.get('data_cadastro')}")
+    except Exception as e:
+        st.error(f"Ocorreu um erro ao exibir os detalhes: {e}")
+        st.exception(e)
 
 def page_interessados():
     st.title("Interessados")
@@ -691,11 +683,11 @@ def page_relatorios():
         xlsx_path = "relatorio_imoveis.xlsx"
         with pd.ExcelWriter(xlsx_path, engine="openpyxl") as writer:
             df.to_excel(writer, index=False, sheet_name="Relatório")
-        xlsx_link = f"  |  [Baixar Excel](sandbox:/{xlsx_path})"
+        xlsx_link = "  |  [Baixar Excel](sandbox:/relatorio_imoveis.xlsx)"
     except Exception:
         xlsx_link = "  *(Excel indisponível — instale `openpyxl` ou `XlsxWriter` para habilitar)*"
     df.to_csv(csv_path, index=False, encoding="utf-8-sig")
-    st.markdown(f"[Baixar CSV](sandbox:/{csv_path}){xlsx_link}")
+    st.markdown(f"[Baixar CSV](sandbox:/relatorio_imoveis.csv){xlsx_link}")
 
 # ================= Main =================
 def main():
@@ -704,7 +696,7 @@ def main():
     page=st.sidebar.radio(
         "Navegar",
         ["Cadastrar Imóvel","Consulta de Imóveis","Interessados","Relatórios"],
-        index=0
+        index=1  # abre direto na consulta
     )
     if page=="Cadastrar Imóvel": page_cadastrar()
     elif page=="Consulta de Imóveis": page_consulta()
