@@ -2,18 +2,28 @@ name: keep-alive-streamlit
 
 on:
   schedule:
-    - cron: '*/5 * * * *'   # a cada 5 minutos
-  workflow_dispatch:
+    - cron: "*/5 * * * *"   # a cada 5 min (em UTC)
+  workflow_dispatch:        # permite rodar manualmente
 
 jobs:
   ping:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 5
     steps:
-      - name: Ping principal
+      - name: Hit Streamlit app (wake & keep alive)
         run: |
-          curl -L -I --max-time 20 --retry 2 --retry-delay 2 "https://fabicorretora.streamlit.app/" || true
-      - name: Ping GET simples (mede status)
-        run: |
-          code=$(curl -L -s -o /dev/null -w "%{http_code}\n" --max-time 20 "https://fabicorretora.streamlit.app/" || echo "000")
-          echo "::notice title=HTTP status::$code"
+          URL="https://fabicorretora.streamlit.app/?keepalive=$(date +%s)"
+          echo "Pinging $URL"
+          # Tenta até 5 vezes, seguindo redirecionamentos (-L) e exibindo HTTP code
+          for i in {1..5}; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" -A "keep-alive-bot" -L "$URL")
+            echo "Attempt $i -> HTTP $code"
+            # Considera sucesso qualquer 2xx ou 3xx
+            if [ "$code" -ge 200 ] && [ "$code" -lt 400 ]; then
+              echo "OK"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Failed to ping app."
+          exit 1
